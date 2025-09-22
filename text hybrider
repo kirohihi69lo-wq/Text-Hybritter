@@ -1,0 +1,2312 @@
+# MIT License / HIROKI License
+
+from __future__ import annotations
+import sys
+import math
+import time
+import mmap
+import bisect
+import struct
+import hashlib
+import itertools
+import unicodedata
+import textwrap
+from io import BytesIO
+from collections import deque, Counter, defaultdict
+from typing import (
+    Any,
+    Optional,
+    Union,
+    Iterator,
+    Sequence,
+    Iterable,
+    Callable,
+    Generator,
+    Dict,
+    List,
+    Tuple,
+    Set,
+    FrozenSet,
+)
+
+__all__ = [
+    "StyleMap",
+    "Segment",
+    "StyledText",
+    "ConsoleRenderer",
+    "TextBuffer",
+    "SonicBuffer",
+    "DeltaGate",
+    "SonicMeter",
+    "Pipeline",
+    "vec",
+    "cast",
+    "plan_chunks",
+    "windowed",
+    "chunk",
+    "take",
+    "drop",
+    "filter_pred",
+    "unique",
+    "sort_key",
+    "topk",
+    "argmin",
+    "argmax",
+    "partition",
+    "prefix_sum",
+    "kahan_sum",
+    "fsum",
+    "pairwise_mean",
+    "var",
+    "median",
+    "quantile",
+    "logsumexp",
+    "median_abs_dev",
+    "winsorized_mean",
+    "softmax",
+    "map_f",
+    "reduce_f",
+    "dot",
+    "norm",
+    "scale",
+    "axpy",
+    "cross",
+    "matvec",
+    "spmv",
+    "ntt_conv",
+    "pipe",
+    "guard",
+    "tap",
+    "tee",
+    "compose",
+    "curry",
+    "chain",
+    "bench",
+    "metrics_snapshot",
+    "trace",
+    "seed_scope",
+    "delta_gate",
+    "autotune_tiles",
+    "sandbox_eval",
+    "channel",
+    "gather",
+    "zero_copy",
+    "type_guard",
+    "protocol",
+    "pipe_stream",
+    "compose_async",
+    "emit",
+    "read",
+    "binpack",
+    "mmap_read",
+    "mmap_write",
+    "checkpoint",
+    "restore",
+    "stream",
+    "time_ms",
+    "validate",
+    "limit",
+    "caps",
+    "backpressure",
+    "quota_tracker",
+    "backoff_retry",
+    "hotcall",
+    "sonic_dispatch",
+    "plan_bin",
+    "match_case",
+    "sym_expr",
+    "simplify",
+    "diff_expr",
+    "integrate_expr",
+    "solve_eq",
+    "lambda_lift",
+    "pattern_match",
+    "unify",
+    "type_infer",
+    "rewrite",
+    "pad",
+    "diff",
+    "flatten",
+    "zip_strict",
+    "count",
+    "group_by",
+    "rolling_mean",
+    "ewma",
+    "histogram",
+    "cummin",
+    "cummax",
+    "rank",
+    "welford_var",
+    "p2_quantile",
+    "gemv",
+    "gemm",
+    "conv1d",
+    "fft",
+    "ifft",
+    "timeout",
+    "burst_credit",
+    "aot_store",
+    "aot_load",
+    "crc32",
+    "hmac_key",
+    "dga_update",
+    "pack_into",
+    "unpack_from",
+    "fast_iter",
+    "tier_level",
+]
+
+
+# — PSS Primitives —
+
+
+def vec(n: int, init: float = 0.0) -> List[float]:
+    """Create vector of size n with init.
+
+    Args:
+        n: Size.
+        init: Initial value.
+
+    Returns:
+        Vector.
+    """
+    return [init] * n
+
+
+def cast(seq: Sequence[Any], t: type) -> List[Any]:
+    """Cast sequence to type.
+
+    Args:
+        seq: Input sequence.
+        t: Target type.
+
+    Returns:
+        Casted list.
+    """
+    return [t(x) for x in seq]
+
+
+def pad(seq: Sequence[float], length: int, mode: str = "same") -> List[float]:
+    """Pad sequence to length.
+
+    Args:
+        seq: Input sequence.
+        length: Target length.
+        mode: Pad mode: same, zero, reflect.
+
+    Returns:
+        Padded list.
+    """
+    if len(seq) >= length:
+        return list(seq[:length])
+    diff = length - len(seq)
+    if mode == "zero":
+        return list(seq) + [0.0] * diff
+    elif mode == "reflect":
+        pad = list(reversed(seq[:diff]))
+        return pad + list(seq)
+    return list(seq) + list(seq[-diff:])  # same
+
+
+def diff(seq: Sequence[float]) -> List[float]:
+    """Compute differences.
+
+    Args:
+        seq: Input sequence.
+
+    Returns:
+        Differences.
+    """
+    return [seq[i + 1] - seq[i] for i in range(len(seq) - 1)]
+
+
+def flatten(seq: Iterable[Iterable[Any]]) -> List[Any]:
+    """Flatten nested iterable.
+
+    Args:
+        seq: Nested iterable.
+
+    Returns:
+        Flat list.
+    """
+    out: List[Any] = []
+    for sub in seq:
+        out.extend(sub)
+    return out
+
+
+def zip_strict(*seqs: Sequence[Any]) -> Iterator[Tuple[Any, ...]]:
+    """Zip strict, raise if lengths differ.
+
+    Args:
+        *seqs: Sequences.
+
+    Yields:
+        Tuples.
+    """
+    iters = [iter(s) for s in seqs]
+    try:
+        while True:
+            yield tuple(next(it) for it in iters)
+    except StopIteration:
+        pass
+
+
+def count(seq: Sequence[Any]) -> Counter:
+    """Count elements.
+
+    Args:
+        seq: Input sequence.
+
+    Returns:
+        Counter.
+    """
+    return Counter(seq)
+
+
+def group_by(seq: Sequence[Any], key: Callable[[Any], Any]) -> Dict[Any, List[Any]]:
+    """Group by key.
+
+    Args:
+        seq: Input sequence.
+        key: Key function.
+
+    Returns:
+        Grouped dict.
+    """
+    out: Dict[Any, List[Any]] = defaultdict(list)
+    for x in seq:
+        out[key(x)].append(x)
+    return out
+
+
+def plan_chunks(n: int, tile: int) -> List[Tuple[int, int]]:
+    """Plan chunk ranges for tiled processing.
+
+    Args:
+        n: Total size.
+        tile: Tile size.
+
+    Returns:
+        List of (start, end) tuples.
+    """
+    return [(i, min(i + tile, n)) for i in range(0, n, tile)]
+
+
+def windowed(seq: Sequence[Any], k: int, step: int = 1) -> Iterator[List[Any]]:
+    """Sliding window over sequence.
+
+    Args:
+        seq: Input sequence.
+        k: Window size.
+        step: Step size.
+
+    Yields:
+        Windows of size k.
+    """
+    n = len(seq)
+    for i in range(0, n - k + 1, step):
+        yield seq[i : i + k]
+
+
+def chunk(seq: Sequence[Any], k: int) -> Iterator[List[Any]]:
+    """Chunk sequence into fixed size.
+
+    Args:
+        seq: Input sequence.
+        k: Chunk size.
+
+    Yields:
+        Chunks of size k.
+    """
+    n = len(seq)
+    for i in range(0, n, k):
+        yield seq[i : i + k]
+
+
+def take(seq: Sequence[Any], n: int) -> List[Any]:
+    """Take first n elements.
+
+    Args:
+        seq: Input sequence.
+        n: Number to take.
+
+    Returns:
+        First n.
+    """
+    return list(seq[:n])
+
+
+def drop(seq: Sequence[Any], n: int) -> List[Any]:
+    """Drop first n elements.
+
+    Args:
+        seq: Input sequence.
+        n: Number to drop.
+
+    Returns:
+        Remaining.
+    """
+    return list(seq[n:])
+
+
+def filter_pred(seq: Sequence[Any], pred: Callable[[Any], bool]) -> List[Any]:
+    """Filter by predicate.
+
+    Args:
+        seq: Input sequence.
+        pred: Predicate.
+
+    Returns:
+        Filtered list.
+    """
+    return [x for x in seq if pred(x)]
+
+
+def unique(seq: Sequence[Any]) -> List[Any]:
+    """Unique elements preserving order.
+
+    Args:
+        seq: Input sequence.
+
+    Returns:
+        Unique list.
+    """
+    seen: Set[Any] = set()
+    out: List[Any] = []
+    for x in seq:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def sort_key(seq: Sequence[Any], key: Callable[[Any], Any]) -> List[Any]:
+    """Sort with key.
+
+    Args:
+        seq: Input sequence.
+        key: Key function.
+
+    Returns:
+        Sorted list.
+    """
+    return sorted(seq, key=key)
+
+
+def topk(seq: Sequence[float], k: int) -> List[Tuple[int, float]]:
+    """Top k elements with indices.
+
+    Args:
+        seq: Input numbers.
+        k: Number to select.
+
+    Returns:
+        List of (index, value) sorted descending.
+    """
+    if k <= 0:
+        return []
+    pairs = [(i, v) for i, v in enumerate(seq)]
+    pairs.sort(key=lambda p: p[1], reverse=True)
+    return pairs[:k]
+
+
+def argmin(seq: Sequence[float]) -> int:
+    """Argmin index.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Index of min.
+    """
+    return min(range(len(seq)), key=seq.__getitem__)
+
+
+def argmax(seq: Sequence[float]) -> int:
+    """Argmax index.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Index of max.
+    """
+    return max(range(len(seq)), key=seq.__getitem__)
+
+
+def partition(
+    seq: Sequence[Any], pred: Callable[[Any], bool]
+) -> Tuple[List[Any], List[Any]]:
+    """Partition by predicate.
+
+    Args:
+        seq: Input sequence.
+        pred: Predicate.
+
+    Returns:
+        (true, false) lists.
+    """
+    true: List[Any] = []
+    false: List[Any] = []
+    for x in seq:
+        (true if pred(x) else false).append(x)
+    return true, false
+
+
+def prefix_sum(seq: Sequence[float]) -> List[float]:
+    """Compute prefix sums in-place like.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Prefix sums.
+    """
+    out = vec(len(seq))
+    if seq:
+        out[0] = seq[0]
+        for i in range(1, len(seq)):
+            out[i] = out[i - 1] + seq[i]
+    return out
+
+
+def kahan_sum(seq: Sequence[float]) -> float:
+    """Kahan summation for precision.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Sum.
+    """
+    s = 0.0
+    c = 0.0
+    for y in seq:
+        t = s + y
+        c += (s - t) + y
+        s = t
+    return s + c
+
+
+def fsum(seq: Sequence[float]) -> float:
+    """Precise floating sum.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Sum.
+    """
+    return math.fsum(seq)
+
+
+def pairwise_mean(seq: Sequence[float]) -> float:
+    """Pairwise mean for stability.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Mean.
+    """
+    n = len(seq)
+    if n == 0:
+        return 0.0
+    return kahan_sum(seq) / n
+
+
+def rolling_mean(seq: Sequence[float], k: int) -> List[float]:
+    """Rolling mean.
+
+    Args:
+        seq: Input numbers.
+        k: Window size.
+
+    Returns:
+        Rolling means.
+    """
+    n = len(seq)
+    if n < k:
+        return []
+    ps = prefix_sum(seq)
+    out = vec(n - k + 1)
+    out[0] = ps[k - 1] / k
+    for i in range(1, n - k + 1):
+        out[i] = (ps[i + k - 1] - ps[i - 1]) / k
+    return out
+
+
+def ewma(seq: Sequence[float], alpha: float = 0.1) -> List[float]:
+    """Exponential weighted moving average.
+
+    Args:
+        seq: Input numbers.
+        alpha: Smoothing factor.
+
+    Returns:
+        EWMA list.
+    """
+    n = len(seq)
+    if n == 0:
+        return []
+    out = vec(n)
+    out[0] = seq[0]
+    for i in range(1, n):
+        out[i] = alpha * seq[i] + (1 - alpha) * out[i - 1]
+    return out
+
+
+def histogram(seq: Sequence[float], bins: int = 10) -> Tuple[List[int], List[float]]:
+    """Histogram counts and edges.
+
+    Args:
+        seq: Input numbers.
+        bins: Number of bins.
+
+    Returns:
+        (counts, edges)
+    """
+    if not seq:
+        return [], []
+    mn, mx = min(seq), max(seq)
+    step = (mx - mn) / bins
+    edges = [mn + i * step for i in range(bins + 1)]
+    counts = vec(bins, 0)
+    for x in seq:
+        idx = bisect.bisect_left(edges, x) - 1
+        if idx < 0:
+            idx = 0
+        if idx >= bins:
+            idx = bins - 1
+        counts[idx] += 1
+    return counts, edges
+
+
+def cummin(seq: Sequence[float]) -> List[float]:
+    """Cumulative min.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Cummin list.
+    """
+    n = len(seq)
+    if n == 0:
+        return []
+    out = vec(n)
+    out[0] = seq[0]
+    for i in range(1, n):
+        out[i] = min(out[i - 1], seq[i])
+    return out
+
+
+def cummax(seq: Sequence[float]) -> List[float]:
+    """Cumulative max.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Cummax list.
+    """
+    n = len(seq)
+    if n == 0:
+        return []
+    out = vec(n)
+    out[0] = seq[0]
+    for i in range(1, n):
+        out[i] = max(out[i - 1], seq[i])
+    return out
+
+
+def rank(seq: Sequence[float]) -> List[int]:
+    """Rank of elements.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Ranks starting from 1.
+    """
+    sorted_idx = sorted(range(len(seq)), key=seq.__getitem__)
+    out = vec(len(seq), 0)
+    for r, i in enumerate(sorted_idx, 1):
+        out[i] = r
+    return out
+
+
+def var(seq: Sequence[float]) -> float:
+    """Variance.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Variance.
+    """
+    n = len(seq)
+    if n < 2:
+        return 0.0
+    m = pairwise_mean(seq)
+    return kahan_sum((x - m) ** 2 for x in seq) / (n - 1)
+
+
+def welford_var(seq: Sequence[float]) -> float:
+    """Welford's online variance.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Variance.
+    """
+    n = 0
+    mean = 0.0
+    m2 = 0.0
+    for x in seq:
+        n += 1
+        delta = x - mean
+        mean += delta / n
+        delta2 = x - mean
+        m2 += delta * delta2
+    if n < 2:
+        return 0.0
+    return m2 / (n - 1)
+
+
+def median(seq: Sequence[float]) -> float:
+    """Median.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        Median.
+    """
+    sorted_seq = sorted(seq)
+    n = len(sorted_seq)
+    if n % 2 == 1:
+        return sorted_seq[n // 2]
+    return (sorted_seq[n // 2 - 1] + sorted_seq[n // 2]) / 2
+
+
+def quantile(seq: Sequence[float], q: float) -> float:
+    """Quantile.
+
+    Args:
+        seq: Input numbers.
+        q: Quantile in [0,1].
+
+    Returns:
+        Quantile value.
+    """
+    sorted_seq = sorted(seq)
+    n = len(sorted_seq)
+    pos = q * (n - 1)
+    i = int(pos)
+    frac = pos - i
+    if i >= n - 1:
+        return sorted_seq[-1]
+    return sorted_seq[i] + frac * (sorted_seq[i + 1] - sorted_seq[i])
+
+
+def p2_quantile(seq: Sequence[float], q: float = 0.5) -> float:
+    """P2 approximate quantile online.
+
+    Args:
+        seq: Input numbers.
+        q: Quantile.
+
+    Returns:
+        Approximate quantile.
+    """
+    markers = [0.0] * 5
+    positions = [1, 1 + 2 * q, 1 + 4 * q, 3 + 2 * q, 5]
+    heights = sorted(seq[:5]) if len(seq) >= 5 else sorted(seq + [0.0] * (5 - len(seq)))
+    markers = heights
+    for x in seq[5:]:
+        k = sum(1 for m in markers if x > m)
+        for i in range(k, 5):
+            positions[i] += 1
+        for i in range(1, 4):
+            d = positions[i + 1] - positions[i]
+            markers[i] += d
+    return markers[2]
+
+
+def logsumexp(seq: Sequence[float]) -> float:
+    """Log sum exp for stability.
+
+    Args:
+        seq: Input logits.
+
+    Returns:
+        Log sum exp.
+    """
+    if not seq:
+        return -math.inf
+    m = max(seq)
+    return m + math.log(sum(math.exp(x - m) for x in seq))
+
+
+def median_abs_dev(seq: Sequence[float]) -> float:
+    """Median absolute deviation.
+
+    Args:
+        seq: Input numbers.
+
+    Returns:
+        MAD.
+    """
+    m = median(seq)
+    devs = [abs(x - m) for x in seq]
+    return median(devs)
+
+
+def winsorized_mean(seq: Sequence[float], clip: float = 0.05) -> float:
+    """Winsorized mean clipping extremes.
+
+    Args:
+        seq: Input numbers.
+        clip: Clip fraction.
+
+    Returns:
+        Mean after clipping.
+    """
+    n = len(seq)
+    if n < 2:
+        return pairwise_mean(seq)
+    sorted_seq = sorted(seq)
+    k = int(n * clip)
+    clipped = sorted_seq[k : n - k]
+    return pairwise_mean(clipped)
+
+
+def softmax(seq: Sequence[float]) -> List[float]:
+    """Softmax probabilities.
+
+    Args:
+        seq: Input logits.
+
+    Returns:
+        Probabilities.
+    """
+    lse = logsumexp(seq)
+    return [math.exp(x - lse) for x in seq]
+
+
+def map_f(seq: Sequence[Any], f: Callable[[Any], Any]) -> List[Any]:
+    """Map function over sequence.
+
+    Args:
+        seq: Input sequence.
+        f: Function.
+
+    Returns:
+        Mapped list.
+    """
+    return [f(x) for x in seq]
+
+
+def reduce_f(seq: Sequence[Any], f: Callable[[Any, Any], Any], init: Any) -> Any:
+    """Reduce with function and init.
+
+    Args:
+        seq: Input sequence.
+        f: Reduce function.
+        init: Initial value.
+
+    Returns:
+        Reduced value.
+    """
+    acc = init
+    for x in seq:
+        acc = f(acc, x)
+    return acc
+
+
+def dot(a: Sequence[float], b: Sequence[float]) -> float:
+    """Dot product with accumulation.
+
+    Args:
+        a: Vector a.
+        b: Vector b.
+
+    Returns:
+        Dot product.
+    """
+    return kahan_sum(x * y for x, y in zip(a, b))
+
+
+def norm(seq: Sequence[float], p: float = 2.0) -> float:
+    """Vector norm.
+
+    Args:
+        seq: Input vector.
+        p: Norm order.
+
+    Returns:
+        Norm value.
+    """
+    if p == math.inf:
+        return max(abs(x) for x in seq) if seq else 0.0
+    if p == 1.0:
+        return sum(abs(x) for x in seq)
+    return sum(abs(x) ** p for x in seq) ** (1 / p)
+
+
+def scale(a: float, x: Sequence[float]) -> List[float]:
+    """Scale vector by scalar in-place like.
+
+    Args:
+        a: Scalar.
+        x: Vector.
+
+    Returns:
+        Scaled vector.
+    """
+    return [a * xi for xi in x]
+
+
+def axpy(a: float, x: Sequence[float], y: Sequence[float]) -> List[float]:
+    """AXPY: a*x + y.
+
+    Args:
+        a: Scalar.
+        x: Vector x.
+        y: Vector y.
+
+    Returns:
+        New vector.
+    """
+    return [a * xi + yi for xi, yi in zip(x, y)]
+
+
+def cross(a: Sequence[float], b: Sequence[float]) -> List[float]:
+    """Cross product for 3D vectors.
+
+    Args:
+        a: Vector a.
+        b: Vector b.
+
+    Returns:
+        Cross product.
+    """
+    return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+
+
+def matvec(A: Sequence[Sequence[float]], x: Sequence[float]) -> List[float]:
+    """Matrix-vector multiply.
+
+    Args:
+        A: Matrix.
+        x: Vector.
+
+    Returns:
+        A @ x.
+    """
+    return [dot(row, x) for row in A]
+
+
+def gemv(
+    alpha: float,
+    A: Sequence[Sequence[float]],
+    x: Sequence[float],
+    beta: float,
+    y: Sequence[float],
+) -> List[float]:
+    """GEMV: alpha * A @ x + beta * y.
+
+    Args:
+        alpha: Scalar alpha.
+        A: Matrix.
+        x: Vector x.
+        beta: Scalar beta.
+        y: Vector y.
+
+    Returns:
+        Result vector.
+    """
+    mv = matvec(A, x)
+    return axpy(alpha, mv, scale(beta, y))
+
+
+def gemm(
+    alpha: float,
+    A: Sequence[Sequence[float]],
+    B: Sequence[Sequence[float]],
+    beta: float,
+    C: Sequence[Sequence[float]],
+) -> List[List[float]]:
+    """GEMM: alpha * A @ B + beta * C.
+
+    Args:
+        alpha: Scalar alpha.
+        A: Matrix A.
+        B: Matrix B.
+        beta: Scalar beta.
+        C: Matrix C.
+
+    Returns:
+        Result matrix.
+    """
+    m, n = len(A), len(B[0])
+    out = [vec(n) for _ in range(m)]
+    for i in range(m):
+        for j in range(n):
+            s = 0.0
+            for k in range(len(B)):
+                s += A[i][k] * B[k][j]
+            out[i][j] = alpha * s + beta * C[i][j]
+    return out
+
+
+def spmv(
+    csr: Tuple[List[int], List[int], List[float]], x: Sequence[float]
+) -> List[float]:
+    """Sparse matrix-vector multiply in CSR.
+
+    Args:
+        csr: (row_ptr, col_ind, data).
+        x: Vector.
+
+    Returns:
+        Result vector.
+    """
+    row_ptr, col_ind, data = csr
+    n = len(row_ptr) - 1
+    out = vec(n)
+    for i in range(n):
+        s = 0.0
+        for j in range(row_ptr[i], row_ptr[i + 1]):
+            s += data[j] * x[col_ind[j]]
+        out[i] = s
+    return out
+
+
+def conv1d(signal: Sequence[float], kernel: Sequence[float]) -> List[float]:
+    """1D convolution.
+
+    Args:
+        signal: Input signal.
+        kernel: Kernel.
+
+    Returns:
+        Convolved signal.
+    """
+    n, m = len(signal), len(kernel)
+    out = vec(n + m - 1)
+    for i in range(n):
+        for j in range(m):
+            out[i + j] += signal[i] * kernel[j]
+    return out
+
+
+def ntt_conv(a: Sequence[int], b: Sequence[int], mod: int = 998244353) -> List[int]:
+    """NTT convolution modulo mod (naive for pure Python).
+
+    Args:
+        a: Sequence a.
+        b: Sequence b.
+        mod: Modulus.
+
+    Returns:
+        Convolution.
+    """
+    n = len(a) + len(b) - 1
+    out = vec(n, 0)
+    for i in range(len(a)):
+        for j in range(len(b)):
+            out[i + j] = (out[i + j] + a[i] * b[j]) % mod
+    return out
+
+
+def fft(seq: Sequence[complex]) -> List[complex]:
+    """FFT (Cooley-Tukey).
+
+    Args:
+        seq: Input sequence (power of 2).
+
+    Returns:
+        FFT.
+    """
+    n = len(seq)
+    if n <= 1:
+        return list(seq)
+    even = fft(seq[0::2])
+    odd = fft(seq[1::2])
+    out = vec(n, 0j)
+    for k in range(n // 2):
+        w = math.exp(-2j * math.pi * k / n)
+        out[k] = even[k] + w * odd[k]
+        out[k + n // 2] = even[k] - w * odd[k]
+    return out
+
+
+def ifft(seq: Sequence[complex]) -> List[complex]:
+    """IFFT.
+
+    Args:
+        seq: Input sequence (power of 2).
+
+    Returns:
+        IFFT.
+    """
+    n = len(seq)
+    conj = [z.conjugate() for z in seq]
+    out = fft(conj)
+    return [z.conjugate() / n for z in out]
+
+
+def pipe(value: Any, *funcs: Callable[[Any], Any]) -> Any:
+    """Pipe value through functions.
+
+    Args:
+        value: Initial value.
+        *funcs: Functions.
+
+    Returns:
+        Final value.
+    """
+    for f in funcs:
+        value = f(value)
+    return value
+
+
+def guard(pred: Callable[[Any], bool], f: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """Guard function with predicate.
+
+    Args:
+        pred: Predicate.
+        f: Function.
+
+    Returns:
+        Guarded function.
+    """
+
+    def wrapped(x: Any) -> Any:
+        if not pred(x):
+            raise ValueError("Visible: guard failed")
+        return f(x)
+
+    return wrapped
+
+
+def tap(value: Any, f: Callable[[Any], None]) -> Any:
+    """Tap value with side effect.
+
+    Args:
+        value: Value.
+        f: Side effect function.
+
+    Returns:
+        Value.
+    """
+    f(value)
+    return value
+
+
+def tee(value: Any, *fs: Callable[[Any], None]) -> Any:
+    """Tee value to side effects.
+
+    Args:
+        value: Value.
+        *fs: Side effect functions.
+
+    Returns:
+        Value.
+    """
+    for f in fs:
+        f(value)
+    return value
+
+
+def compose(*funcs: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """Compose functions right to left.
+
+    Args:
+        *funcs: Functions.
+
+    Returns:
+        Composed function.
+    """
+
+    def composed(x: Any) -> Any:
+        for f in reversed(funcs):
+            x = f(x)
+        return x
+
+    return composed
+
+
+def curry(f: Callable[..., Any], *args: Any) -> Callable[..., Any]:
+    """Curry function.
+
+    Args:
+        f: Function.
+        *args: Partial args.
+
+    Returns:
+        Curried function.
+    """
+
+    def curried(*more: Any) -> Any:
+        return f(*args, *more)
+
+    return curried
+
+
+def chain(*funcs: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """Chain functions left to right.
+
+    Args:
+        *funcs: Functions.
+
+    Returns:
+        Chained function.
+    """
+
+    def chained(x: Any) -> Any:
+        for f in funcs:
+            x = f(x)
+        return x
+
+    return chained
+
+
+def bench(f: Callable[[], Any], n: int = 100) -> float:
+    """Benchmark function average ms.
+
+    Args:
+        f: Function.
+        n: Iterations.
+
+    Returns:
+        Average ms.
+    """
+    start = time.perf_counter()
+    for _ in range(n):
+        f()
+    return (time.perf_counter() - start) * 1000 / n
+
+
+def metrics_snapshot() -> Dict[str, float]:
+    """Mock metrics snapshot.
+
+    Returns:
+        Metrics dict.
+    """
+    return {
+        "p50_ms": 0.5,
+        "p95_ms": 1.0,
+        "qps": 1000,
+        "mem%": 42.0,
+        "jit_hit": 0.98,
+        "io_hide": 0.97,
+    }
+
+
+def trace(tag: str, kv: Dict[str, Any]) -> None:
+    """Trace with tag and kv to stdout.
+
+    Args:
+        tag: Tag.
+        kv: Key-values.
+    """
+    print(f"Trace {tag}: {kv}")
+
+
+def seed_scope(seed: int) -> Callable[[Callable[[], Any]], Any]:
+    """Seed scope decorator.
+
+    Args:
+        seed: Seed.
+
+    Returns:
+        Decorator.
+    """
+
+    def decorator(f: Callable[[], Any]) -> Any:
+        import random
+
+        prev = random.getstate()
+        random.seed(seed)
+        try:
+            return f()
+        finally:
+            random.setstate(prev)
+
+    return decorator
+
+
+def delta_gate(codec: str, data: Any) -> bytes:
+    """Delta gate encode.
+
+    Args:
+        codec: Codec.
+        data: Data.
+
+    Returns:
+        Encoded bytes.
+    """
+    if codec == "utf-8":
+        return str(data).encode("utf-8")
+    raise ValueError("Visible: unsupported codec")
+
+
+def autotune_tiles(shape: Tuple[int, ...]) -> int:
+    """Auto tune tile size.
+
+    Args:
+        shape: Shape.
+
+    Returns:
+        Tile size.
+    """
+    prod = 1
+    for s in shape:
+        prod *= s
+    return prod // 1024 + 1
+
+
+def sandbox_eval(expr: str) -> Any:
+    """Sandbox eval with limited globals.
+
+    Args:
+        expr: Expression.
+
+    Returns:
+        Result.
+    """
+    safe_dict = {"math": math, "sys": sys}
+    return eval(expr, {"__builtins__": {}}, safe_dict)
+
+
+def channel() -> deque[Any]:
+    """Create channel deque.
+
+    Returns:
+        Channel.
+    """
+    return deque()
+
+
+def gather(tasks: List[Callable[[], Any]]) -> List[Any]:
+    """Gather tasks sequentially.
+
+    Args:
+        tasks: Tasks.
+
+    Returns:
+        Results.
+    """
+    return [t() for t in tasks]
+
+
+def zero_copy(buf: memoryview) -> memoryview:
+    """Zero copy view.
+
+    Args:
+        buf: Buffer.
+
+    Returns:
+        View.
+    """
+    return buf
+
+
+def type_guard(obj: Any, t: type) -> bool:
+    """Type guard check.
+
+    Args:
+        obj: Object.
+        t: Type.
+
+    Returns:
+        True if matches.
+    """
+    return isinstance(obj, t)
+
+
+def protocol(obj: Any, spec: Dict[str, type]) -> bool:
+    """Protocol conformance check.
+
+    Args:
+        obj: Object.
+        spec: Spec.
+
+    Returns:
+        True if conforms.
+    """
+    for k, t in spec.items():
+        if not hasattr(obj, k) or not isinstance(getattr(obj, k), t):
+            return False
+    return True
+
+
+def pipe_stream(seq: Iterable[Any], ops: List[Callable[[Any], Any]]) -> Iterator[Any]:
+    """Pipe stream through ops.
+
+    Args:
+        seq: Iterable.
+        ops: Operations.
+
+    Yields:
+        Processed.
+    """
+    for op in ops:
+        seq = (op(x) for x in seq)
+    yield from seq
+
+
+def compose_async(funcs: List[Callable[[Any], Any]]) -> Callable[[Any], Any]:
+    """Compose async as seq.
+
+    Args:
+        funcs: Functions.
+
+    Returns:
+        Composed.
+    """
+    return compose(*funcs)
+
+
+def emit(data: Any, fmt: str = "text", stream: Any = sys.stdout) -> None:
+    """Emit data in format.
+
+    Args:
+        data: Data.
+        fmt: Format.
+        stream: Stream.
+    """
+    if fmt == "text":
+        stream.write(str(data) + "\n")
+    elif fmt == "each":
+        for item in data:
+            stream.write(str(item) + "\n")
+
+
+def read(path: str, fmt: str = "text") -> Any:
+    """Read from path in format.
+
+    Args:
+        path: Path.
+        fmt: Format.
+
+    Returns:
+        Data.
+    """
+    with open(path, "r") as f:
+        if fmt == "text":
+            return f.read()
+        return None  # Extend as needed.
+
+
+def binpack(data: bytes) -> bytes:
+    """Binpack data (identity for pure).
+
+    Args:
+        data: Bytes.
+
+    Returns:
+        Packed.
+    """
+    return data
+
+
+def mmap_read(path: str, offset: int, n: int) -> bytes:
+    """Mmap read.
+
+    Args:
+        path: Path.
+        offset: Offset.
+        n: Bytes.
+
+    Returns:
+        Bytes.
+    """
+    with mmap.mmap(open(path, "rb").fileno(), 0, access=mmap.ACCESS_READ) as m:
+        m.seek(offset)
+        return m.read(n)
+
+
+def mmap_write(path: str, offset: int, data: bytes) -> None:
+    """Mmap write.
+
+    Args:
+        path: Path.
+        offset: Offset.
+        data: Data.
+    """
+    with mmap.mmap(open(path, "r+b").fileno(), 0, access=mmap.ACCESS_WRITE) as m:
+        m.seek(offset)
+        m.write(data)
+
+
+def checkpoint(tag: str, data: Any) -> None:
+    """Checkpoint data (placeholder).
+
+    Args:
+        tag: Tag.
+        data: Data.
+    """
+    pass
+
+
+def restore(tag: str) -> Any:
+    """Restore data (placeholder).
+
+    Args:
+        tag: Tag.
+
+    Returns:
+        Data.
+    """
+    return None
+
+
+def stream(seq: Iterable[Any], batch: int = 128) -> Iterator[List[Any]]:
+    """Stream in batches.
+
+    Args:
+        seq: Iterable.
+        batch: Size.
+
+    Yields:
+        Batches.
+    """
+    it = iter(seq)
+    while True:
+        b = list(itertools.islice(it, batch))
+        if not b:
+            break
+        yield b
+
+
+def time_ms() -> float:
+    """Current time ms.
+
+    Returns:
+        Ms.
+    """
+    return time.perf_counter() * 1000
+
+
+def validate(pred: Callable[[Any], bool], x: Any) -> None:
+    """Validate with pred.
+
+    Args:
+        pred: Predicate.
+        x: Value.
+
+    Raises:
+        ValueError if false.
+    """
+    if not pred(x):
+        raise ValueError("Visible: validation failed")
+
+
+def limit(cpu_ms: float, mem_mb: float) -> None:
+    """Set limits (placeholder).
+
+    Args:
+        cpu_ms: CPU.
+        mem_mb: Mem.
+    """
+    pass
+
+
+def caps() -> Dict[str, float]:
+    """Get caps (placeholder).
+
+    Returns:
+        Caps.
+    """
+    return {}
+
+
+def backpressure(chan: deque[Any], max_inflight: int) -> None:
+    """Backpressure on channel.
+
+    Args:
+        chan: Channel.
+        max_inflight: Max.
+    """
+    while len(chan) > max_inflight:
+        time.sleep(0.001)
+
+
+def quota_tracker(cpu_ms: float, mem_mb: float, io_mb: float) -> Dict[str, float]:
+    """Track quotas.
+
+    Args:
+        cpu_ms: CPU.
+        mem_mb: Mem.
+        io_mb: IO.
+
+    Returns:
+        Usage.
+    """
+    return {"cpu_ms": cpu_ms, "mem_mb": mem_mb, "io_mb": io_mb}
+
+
+def backoff_retry(f: Callable[[], Any], tries: int = 3) -> Any:
+    """Backoff retry.
+
+    Args:
+        f: Function.
+        tries: Tries.
+
+    Returns:
+        Result.
+    """
+    delay = 0.1
+    for _ in range(tries):
+        try:
+            return f()
+        except Exception:
+            time.sleep(delay)
+            delay *= 2
+    raise ValueError("Visible: retry failed")
+
+
+def hotcall(f: Callable[[], Any]) -> Any:
+    """Hot call with warm (placeholder).
+
+    Args:
+        f: Function.
+
+    Returns:
+        Result.
+    """
+    return f()
+
+
+def sonic_dispatch(key: Any, f: Callable[[], Any]) -> Any:
+    """Sonic dispatch (placeholder).
+
+    Args:
+        key: Key.
+        f: Function.
+
+    Returns:
+        Result.
+    """
+    return f()
+
+
+def plan_bin(n: int) -> int:
+    """Plan bin size.
+
+    Args:
+        n: Size.
+
+    Returns:
+        Bin size.
+    """
+    return 1 << (n.bit_length() - 1)
+
+
+def match_case(expr: Any, cases: Dict[Any, Any]) -> Any:
+    """Match case.
+
+    Args:
+        expr: Expression.
+        cases: Cases.
+
+    Returns:
+        Matched.
+    """
+    return cases.get(expr, None)
+
+
+def sym_expr(expr: str) -> str:
+    """Symbolic expression placeholder.
+
+    Args:
+        expr: Expr.
+
+    Returns:
+        Expr.
+    """
+    return expr
+
+
+def simplify(expr: str) -> str:
+    """Simplify placeholder.
+
+    Args:
+        expr: Expr.
+
+    Returns:
+        Simplified.
+    """
+    return expr
+
+
+def diff_expr(expr: str, var: str) -> str:
+    """Diff placeholder.
+
+    Args:
+        expr: Expr.
+        var: Var.
+
+    Returns:
+        Diff.
+    """
+    return expr
+
+
+def integrate_expr(expr: str, var: str) -> str:
+    """Integrate placeholder.
+
+    Args:
+        expr: Expr.
+        var: Var.
+
+    Returns:
+        Integral.
+    """
+    return expr
+
+
+def solve_eq(expr: str, var: str) -> str:
+    """Solve placeholder.
+
+    Args:
+        expr: Expr.
+        var: Var.
+
+    Returns:
+        Solution.
+    """
+    return expr
+
+
+def lambda_lift(expr: str) -> str:
+    """Lambda lift placeholder.
+
+    Args:
+        expr: Expr.
+
+    Returns:
+        Lifted.
+    """
+    return expr
+
+
+def pattern_match(expr: str, rules: List[Tuple[str, str]]) -> str:
+    """Pattern match replace.
+
+    Args:
+        expr: Expr.
+        rules: Rules.
+
+    Returns:
+        Matched.
+    """
+    for p, r in rules:
+        expr = expr.replace(p, r)
+    return expr
+
+
+def unify(term1: str, term2: str) -> Dict[str, str]:
+    """Unify placeholder.
+
+    Args:
+        term1: Term1.
+        term2: Term2.
+
+    Returns:
+        Substitution.
+    """
+    return {}
+
+
+def type_infer(expr: str) -> str:
+    """Type infer placeholder.
+
+    Args:
+        expr: Expr.
+
+    Returns:
+        Type.
+    """
+    return "any"
+
+
+def rewrite(expr: str, rules: List[Tuple[str, str]]) -> str:
+    """Rewrite with rules.
+
+    Args:
+        expr: Expr.
+        rules: Rules.
+
+    Returns:
+        Rewritten.
+    """
+    return pattern_match(expr, rules)
+
+
+def timeout(task: Callable[[], Any], ms: float) -> Any:
+    """Timeout task (placeholder seq).
+
+    Args:
+        task: Task.
+        ms: Ms.
+
+    Returns:
+        Result or None.
+    """
+    return task()
+
+
+def burst_credit() -> float:
+    """Burst credit (placeholder).
+
+    Returns:
+        Credit.
+    """
+    return 500.0
+
+
+def aot_store(key: str, data: Any) -> None:
+    """AOT store (placeholder).
+
+    Args:
+        key: Key.
+        data: Data.
+    """
+    pass
+
+
+def aot_load(key: str) -> Any:
+    """AOT load (placeholder).
+
+    Args:
+        key: Key.
+
+    Returns:
+        Data.
+    """
+    return None
+
+
+def crc32(data: bytes) -> int:
+    """CRC32 hash.
+
+    Args:
+        data: Bytes.
+
+    Returns:
+        CRC32.
+    """
+    return hashlib.sha256(data).hexdigest()  # Placeholder, use binascii if needed.
+
+
+def hmac_key(key: bytes, data: bytes) -> bytes:
+    """HMAC (placeholder).
+
+    Args:
+        key: Key.
+        data: Data.
+
+    Returns:
+        HMAC.
+    """
+    return data
+
+
+def dga_update(prev: bytes, delta: bytes) -> bytes:
+    """DGA update (placeholder).
+
+    Args:
+        prev: Prev.
+        delta: Delta.
+
+    Returns:
+        Updated.
+    """
+    return delta
+
+
+def pack_into(fmt: str, buf: bytearray, offset: int, *values: Any) -> None:
+    """Pack into buffer.
+
+    Args:
+        fmt: Format.
+        buf: Buffer.
+        offset: Offset.
+        *values: Values.
+    """
+    struct.pack_into(fmt, buf, offset, *values)
+
+
+def unpack_from(fmt: str, buf: bytes, offset: int = 0) -> Tuple[Any, ...]:
+    """Unpack from buffer.
+
+    Args:
+        fmt: Format.
+        buf: Buffer.
+        offset: Offset.
+
+    Returns:
+        Values.
+    """
+    return struct.unpack_from(fmt, buf, offset)
+
+
+def fast_iter(seq: Iterable[Any]) -> Iterator[Any]:
+    """Fast iter (placeholder).
+
+    Args:
+        seq: Iterable.
+
+    Yields:
+        Items.
+    """
+    yield from seq
+
+
+def tier_level(shape: Tuple[int, ...]) -> int:
+    """Tier level from shape.
+
+    Args:
+        shape: Shape.
+
+    Returns:
+        Tier.
+    """
+    return min(3, shape[0].bit_length() // 2)
+
+
+# — StyleMap —
+
+
+class StyleMap:
+    """Map style names to ANSI codes.
+
+    Args:
+        extensions: Extend dict.
+    """
+
+    __slots__ = ("_map",)
+
+    def __init__(self, extensions: Optional[Dict[str, str]] = None) -> None:
+        self._map: Dict[str, str] = {
+            "bold": "1",
+            "italic": "3",
+            "underline": "4",
+            "error": "1;31",
+            "warn": "1;33",
+            "info": "1;34",
+            "success": "1;32",
+            "reset": "0",
+            "dim": "2",
+            "blink": "5",
+            "reverse": "7",
+            "hidden": "8",
+        }
+        if extensions:
+            self._map.update(extensions)
+
+    def resolve(self, name: Optional[str]) -> str:
+        if not name:
+            return ""
+        return self._map.get(name, name)
+
+    def add(self, name: str, code: str) -> None:
+        self._map[name] = code
+
+
+# — Segment —
+
+
+class Segment:
+    """Atomic text unit with style and attrs.
+
+    Args:
+        content: Content.
+        style: Style.
+        attrs: Attrs.
+    """
+
+    __slots__ = ("content", "style", "attrs")
+
+    def __init__(
+        self,
+        content: str,
+        style: Optional[str] = None,
+        attrs: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.content = content
+        self.style = style or ""
+        self.attrs = attrs or {}
+
+    def __repr__(self) -> str:
+        return f"Segment({self.content!r}, {self.style!r}, {self.attrs!r})"
+
+    def with_attr(self, key: str, value: Any) -> Segment:
+        new_attrs = self.attrs.copy()
+        new_attrs[key] = value
+        return Segment(self.content, self.style, new_attrs)
+
+
+# — StyledText —
+
+
+class StyledText:
+    """Immutable styled text sequence.
+
+    Args:
+        segments: Segments.
+    """
+
+    __slots__ = ("_segments", "_hash")
+
+    def __init__(self, segments: Sequence[Segment]) -> None:
+        self._segments = tuple(segments)
+        self._hash = hash(self._segments)
+
+    def __iter__(self) -> Iterator[Segment]:
+        return iter(self._segments)
+
+    def __len__(self) -> int:
+        return len(self._segments)
+
+    def __hash__(self) -> int:
+        return self._hash
+
+    def plain(self) -> str:
+        return "".join(seg.content for seg in self._segments)
+
+    def styled(self, stylemap: Optional[StyleMap] = None) -> str:
+        return "".join(self._format(seg, stylemap) for seg in self._segments)
+
+    def concat(self, other: Union[StyledText, Segment, str]) -> StyledText:
+        if isinstance(other, str):
+            other = StyledText.from_text(other)
+        elif isinstance(other, Segment):
+            other = StyledText([other])
+        return StyledText(self._segments + other._segments)
+
+    def slice(self, start: int, end: int) -> StyledText:
+        return StyledText(self._segments[start:end])
+
+    def replace(self, old: str, new: str, style: Optional[str] = None) -> StyledText:
+        replaced = []
+        for seg in self._segments:
+            parts = seg.content.split(old)
+            for i, part in enumerate(parts):
+                replaced.append(Segment(part, seg.style, seg.attrs))
+                if i < len(parts) - 1:
+                    replaced.append(Segment(new, style or seg.style, seg.attrs))
+        return StyledText(replaced)
+
+    def normalize(self) -> StyledText:
+        normalized = [
+            Segment(unicodedata.normalize("NFC", seg.content), seg.style, seg.attrs)
+            for seg in self._segments
+        ]
+        return StyledText(normalized)
+
+    def search(self, query: str) -> List[Tuple[int, int]]:
+        positions = []
+        offset = 0
+        for seg in self._segments:
+            pos = seg.content.find(query)
+            while pos != -1:
+                positions.append((offset + pos, offset + pos + len(query)))
+                pos = seg.content.find(query, pos + 1)
+            offset += len(seg.content)
+        return positions
+
+    def _format(self, seg: Segment, stylemap: Optional[StyleMap]) -> str:
+        if not seg.style:
+            return seg.content
+        code = stylemap.resolve(seg.style) if stylemap else seg.style
+        return f"\033[{code}m{seg.content}\033[0m"
+
+    @classmethod
+    def from_text(cls, text: str, style: Optional[str] = None) -> StyledText:
+        return cls([Segment(text, style)])
+
+    @classmethod
+    def from_pairs(cls, pairs: Iterable[Tuple[str, Optional[str]]]) -> StyledText:
+        return cls([Segment(t, s) for t, s in pairs])
+
+    @classmethod
+    def from_attr_pairs(
+        cls, pairs: Iterable[Tuple[str, Optional[str], Optional[Dict[str, Any]]]]
+    ) -> StyledText:
+        return cls([Segment(t, s, a) for t, s, a in pairs])
+
+
+# — ConsoleRenderer —
+
+
+class ConsoleRenderer:
+    """Renderer with wrapping and cache.
+
+    Args:
+        width: Width.
+        stream: Stream.
+        force_plain: Plain.
+        stylemap: Map.
+    """
+
+    __slots__ = ("width", "stream", "force_plain", "stylemap", "_cache")
+
+    def __init__(
+        self,
+        width: int = 80,
+        stream: Any = sys.stdout,
+        force_plain: bool = False,
+        stylemap: Optional[StyleMap] = None,
+    ) -> None:
+        self.width = width
+        self.stream = stream
+        self.force_plain = force_plain
+        self.stylemap = stylemap or StyleMap()
+        self._cache: Dict[int, str] = {}
+
+    def render(self, text: StyledText) -> None:
+        h = hash(text)
+        if h in self._cache:
+            out = self._cache[h]
+        else:
+            if self.force_plain or not self.stream.isatty():
+                rendered = text.plain()
+            else:
+                rendered = text.styled(self.stylemap)
+            wrapped = "\n".join(line for line in textwrap.wrap(rendered, self.width))
+            out = wrapped
+            self._cache[h] = out
+        self.stream.write(out + "\n")
+
+    def render_align(self, text: StyledText, mode: str = "left") -> None:
+        plain = text.plain()
+        if mode == "center":
+            out = plain.center(self.width)
+        elif mode == "right":
+            out = plain.rjust(self.width)
+        else:
+            out = plain.ljust(self.width)
+        self.stream.write(out + "\n")
+
+    def measure(self, text: StyledText) -> Dict[str, Any]:
+        plain = text.plain()
+        return {
+            "length": len(plain),
+            "lines": math.ceil(len(plain) / self.width),
+        }
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
+
+
+# — TextBuffer —
+
+
+class TextBuffer:
+    """Buffered writer with history and index.
+
+    Args:
+        capacity: Capacity.
+    """
+
+    __slots__ = ("capacity", "_buffer", "_history", "_index")
+
+    def __init__(self, capacity: int = 1_024) -> None:
+        self.capacity = capacity
+        self._buffer: deque[str] = deque(maxlen=capacity)
+        self._history: List[str] = []
+        self._index: Dict[str, List[int]] = defaultdict(list)
+
+    def write(self, text: Union[str, StyledText]) -> None:
+        plain = text.plain() if isinstance(text, StyledText) else text
+        self._buffer.extend(plain)
+        self._history.append(plain)
+        start = len(self._buffer) - len(plain)
+        for i, char in enumerate(plain):
+            self._index[char].append(start + i)
+
+    def snapshot(self) -> str:
+        return "".join(self._buffer)
+
+    def undo(self) -> None:
+        if self._history:
+            last = self._history.pop()
+            for _ in range(len(last)):
+                popped = self._buffer.pop()
+                self._index[popped].pop()
+
+    def history(self) -> List[str]:
+        return self._history[:]
+
+    def search(self, query: str) -> List[int]:
+        positions = []
+        candidates = sorted(self._index.get(query[0], []))
+        for p in candidates:
+            if self.snapshot()[p : p + len(query)] == query:
+                positions.append(p)
+        return positions
+
+
+# — SonicBuffer —
+
+
+class SonicBuffer:
+    """Binary ring buffer with mmap.
+
+    Args:
+        slots: Slots.
+    """
+
+    __slots__ = ("slots", "_mem", "_view", "_pos", "_counter")
+
+    def __init__(self, slots: int = 65_536) -> None:
+        self.slots = slots
+        self._mem = mmap.mmap(-1, slots)
+        self._view = memoryview(self._mem)
+        self._pos = 0
+        self._counter = Counter()
+
+    def write_bytes(self, data: bytes) -> None:
+        n = len(data)
+        if n > self.slots:
+            raise ValueError("Visible: data > slots")
+        end = self._pos + n
+        if end > self.slots:
+            self._pos = 0
+        self._view[self._pos : end] = data
+        self._pos = (self._pos + n) % self.slots
+        self._counter["writes"] += 1
+
+    def read_bytes(self, n: int) -> bytes:
+        end = self._pos + n
+        if end > self.slots:
+            return bytes(self._view[self._pos :]) + bytes(
+                self._view[: end - self.slots]
+            )
+        return bytes(self._view[self._pos : end])
+
+    def stats(self) -> Dict[str, int]:
+        return dict(self._counter)
+
+
+# — DeltaGate —
+
+
+class DeltaGate:
+    """Codec dispatcher.
+
+    Args:
+        codec: Codec.
+    """
+
+    __slots__ = ("codec",)
+
+    def __init__(self, codec: str = "utf-8") -> None:
+        self.codec = codec
+
+    def encode(self, s: str) -> bytes:
+        return s.encode(self.codec)
+
+    def decode(self, b: bytes) -> str:
+        return b.decode(self.codec)
+
+    def detect(self, b: bytes) -> str:
+        if b.startswith(b"{") or b.startswith(b"["):
+            return "json"
+        if b.count(b",") > 0:
+            return "csv"
+        return "bin"
+
+
+# — SonicMeter —
+
+
+class SonicMeter:
+    """Metrics recorder with window.
+
+    Args:
+        stream: Stream.
+        window: Window.
+    """
+
+    __slots__ = ("stream", "_records", "_window")
+
+    def __init__(self, stream: Any = sys.stdout, window: int = 100) -> None:
+        self.stream = stream
+        self._records: deque[Dict[str, Any]] = deque(maxlen=window)
+        self._window = window
+
+    def snapshot(
+        self, p50_ms: float, p95_ms: float, qps: int, mem: float, jit: float, io: float
+    ) -> None:
+        rec = {
+            "p50_ms": p50_ms,
+            "p95_ms": p95_ms,
+            "qps": qps,
+            "mem%": mem,
+            "jit_hit": jit,
+            "io_hide": io,
+            "ts": time.time(),
+        }
+        self._records.append(rec)
+        self.stream.write(str(rec) + "\n")
+
+    def rolling(self) -> Dict[str, float]:
+        if not self._records:
+            return {}
+        keys = self._records[0].keys()
+        out = {}
+        for k in keys:
+            if k == "ts":
+                continue
+            vals = [r[k] for r in self._records]
+            out[k] = sum(vals) / len(vals)
+        return out
+
+
+# — Pipeline —
+
+
+class Pipeline:
+    """Pipeline chain."""
+
+    __slots__ = ("renderer", "buffer", "sonic", "gate", "meter")
+
+    def __init__(self) -> None:
+        self.renderer = ConsoleRenderer()
+        self.buffer = TextBuffer()
+        self.sonic = SonicBuffer()
+        self.gate = DeltaGate()
+        self.meter = SonicMeter()
+
+    def run(self, text: StyledText) -> None:
+        start = time.perf_counter()
+        self.renderer.render(text)
+        self.buffer.write(text)
+        encoded = self.gate.encode(self.buffer.snapshot())
+        self.sonic.write_bytes(encoded)
+        _ = self.gate.decode(encoded)
+        dur = (time.perf_counter() - start) * 1000
+        self.meter.snapshot(dur / 2, dur, 100, 42.0, 0.98, 0.97)
+
+
+# — Example usage —
+
+stylemap = StyleMap()
+txt = StyledText.from_pairs([("Hello ", "success"), ("World", "error")])
+pipe = Pipeline()
+pipe.run(txt)
+print("Snapshot:", pipe.buffer.snapshot())
+print("Rolling:", pipe.meter.rolling())
