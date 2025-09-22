@@ -53,7 +53,6 @@ and quietly measuring how well it all performed.
 
 🌱 Example
 
-```python
 from hybrid_layout import StyleMap, StyledText, Pipeline
 
 stylemap = StyleMap()
